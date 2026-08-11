@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 
-const ACCOUNTS = ['realDonaldTrump', 'i1ota'];
+const ACCOUNTS = ['realDonaldTrump', 'i1ota', 'elonmusk'];
 const STATE_FILE = 'state.json';
 
 const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
@@ -44,33 +44,38 @@ async function checkAccount(page, handle, state) {
   await page.goto(`https://x.com/${handle}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(3000);
 
-  const posts = await page.$$eval('article', articles =>
-    articles.map(a => {
-      const link = a.querySelector('a[href*="/status/"]');
-      const textEl = a.querySelector('[data-testid="tweetText"]');
-      if (!link) return null;
-      const id = link.href.split('/status/')[1]?.split(/[/?]/)[0];
+  // Only look at top-level timeline cells (cellInnerDiv) and take each cell's
+  // OUTER article — this excludes nested articles from quote-tweets/embeds,
+  // and querySelector('article') always returns the outer one first since it
+  // appears earlier in document order than anything nested inside it.
+  const posts = await page.$$eval('[data-testid="cellInnerDiv"]', (cells, handle) => {
+    return cells.map(cell => {
+      const article = cell.querySelector('article');
+      if (!article) return null;
+      const statusLink = article.querySelector(`a[href*="/${handle}/status/"]`);
+      if (!statusLink) return null; // not authored by this handle (e.g. a plain repost)
+      const id = statusLink.href.split('/status/')[1]?.split(/[/?]/)[0];
       if (!id) return null;
-      return {
-        id,
-        url: `https://x.com/${link.href.split('/status/')[0].split('/').pop()}/status/${id}`,
-        text: textEl ? textEl.innerText : ''
-      };
-    }).filter(Boolean)
-  );
+      const textEl = article.querySelector('[data-testid="tweetText"]');
+      return { id, url: `https://x.com/${handle}/status/${id}`, text: textEl ? textEl.innerText : '' };
+    }).filter(Boolean);
+  }, handle);
 
   if (posts.length === 0) {
     console.log(`${handle}: no posts found (page may be empty or blocked)`);
     return;
   }
 
-  const lastSeenId = state[handle];
-  const newPosts = [];
-  for (const p of posts) {
-    if (p.id === lastSeenId) break;
-    newPosts.push(p);
-  }
-  newPosts.reverse(); // oldest new post first
+  const seen = new Set();
+  const uniquePosts = posts.filter(p => (seen.has(p.id) ? false : (seen.add(p.id), true)));
+
+  // Compare status IDs numerically (Twitter snowflake IDs increase over time)
+  // instead of relying on DOM position, because a pinned post can sit first
+  // in the DOM despite being older than the account's actual latest post.
+  const lastSeenId = state[handle] ? BigInt(state[handle]) : null;
+  const newPosts = uniquePosts
+    .filter(p => lastSeenId === null || BigInt(p.id) > lastSeenId)
+    .sort((a, b) => (BigInt(a.id) > BigInt(b.id) ? 1 : -1)); // oldest new post first
 
   for (const p of newPosts) {
     if (!p.text) continue;
@@ -80,7 +85,7 @@ async function checkAccount(page, handle, state) {
     console.log(`Notified: ${handle} ${p.id}`);
   }
 
-  state[handle] = posts[0].id;
+  state[handle] = uniquePosts.reduce((max, p) => (BigInt(p.id) > BigInt(max) ? p.id : max), uniquePosts[0].id);
 }
 
 async function main() {
