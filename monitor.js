@@ -87,7 +87,12 @@ async function checkAccount(page, handle, state) {
     console.log(`Notified: ${handle} ${p.id}`);
   }
 
-  state[handle] = uniquePosts.reduce((max, p) => (BigInt(p.id) > BigInt(max) ? p.id : max), uniquePosts[0].id);
+  // Seed with the existing stored value (if any) so the baseline can only move
+  // forward. Without this, a run where the previous newest post briefly drops
+  // out of the fetched timeline (ads/reordering/rendering variance) would push
+  // the baseline backward and cause that post to be re-notified later.
+  const seed = state[handle] || uniquePosts[0].id;
+  state[handle] = uniquePosts.reduce((max, p) => (BigInt(p.id) > BigInt(max) ? p.id : max), seed);
 }
 
 async function main() {
