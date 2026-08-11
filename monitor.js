@@ -42,7 +42,7 @@ async function sendDiscord(content) {
 
 async function checkAccount(page, handle, state) {
   await page.goto(`https://x.com/${handle}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(5000);
 
   // Only look at top-level timeline cells (cellInnerDiv) and take each cell's
   // OUTER article — this excludes nested articles from quote-tweets/embeds,
@@ -62,7 +62,9 @@ async function checkAccount(page, handle, state) {
   }, handle);
 
   if (posts.length === 0) {
-    console.log(`${handle}: no posts found (page may be empty or blocked)`);
+    const title = await page.title();
+    const bodySnippet = await page.evaluate(() => document.body.innerText.slice(0, 300));
+    console.log(`${handle}: no posts found. title="${title}" bodySnippet="${bodySnippet.replace(/\n/g, ' ')}"`);
     return;
   }
 
