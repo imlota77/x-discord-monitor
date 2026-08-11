@@ -56,8 +56,25 @@ async function checkAccount(page, handle, state) {
       if (!statusLink) return null; // not authored by this handle (e.g. a plain repost)
       const id = statusLink.href.split('/status/')[1]?.split(/[/?]/)[0];
       if (!id) return null;
-      const textEl = article.querySelector('[data-testid="tweetText"]');
-      return { id, url: `https://x.com/${handle}/status/${id}`, text: textEl ? textEl.innerText : '' };
+
+      // A quote-tweet embeds the quoted post as a nested <article>. Grab the
+      // account's own commentary text (any tweetText NOT inside that nested
+      // article) separately from the quoted post's own text + author, so
+      // callers can include the full quoted content, not just the comment.
+      const nested = article.querySelector('article');
+      const textEls = Array.from(article.querySelectorAll('[data-testid="tweetText"]'));
+      const ownTextEl = nested ? textEls.find(el => !nested.contains(el)) : textEls[0];
+      const text = ownTextEl ? ownTextEl.innerText : '';
+
+      let quoted = null;
+      if (nested) {
+        const qTextEl = nested.querySelector('[data-testid="tweetText"]');
+        const qLink = nested.querySelector('a[href*="/status/"]');
+        const qHandle = qLink ? qLink.href.split('/status/')[0].split('/').filter(Boolean).pop() : null;
+        quoted = { author: qHandle, text: qTextEl ? qTextEl.innerText : '' };
+      }
+
+      return { id, url: `https://x.com/${handle}/status/${id}`, text, quoted };
     }).filter(Boolean);
   }, handle);
 
@@ -80,9 +97,14 @@ async function checkAccount(page, handle, state) {
     .sort((a, b) => (BigInt(a.id) > BigInt(b.id) ? 1 : -1)); // oldest new post first
 
   for (const p of newPosts) {
-    if (!p.text) continue;
-    const translated = await translateToZhTW(p.text);
-    const message = `【${handle} 新貼文】\n原文：${p.text}\n翻譯：${translated}\n連結：${p.url}`;
+    let original = p.text || '';
+    if (p.quoted && p.quoted.text) {
+      original += (original ? '\n\n' : '') + `[引用 @${p.quoted.author}]：${p.quoted.text}`;
+    }
+    if (!original) continue;
+
+    const translated = await translateToZhTW(original);
+    const message = `【${handle} 新貼文】\n原文：${original}\n翻譯：${translated}\n連結：${p.url}`;
     await sendDiscord(message);
     console.log(`Notified: ${handle} ${p.id}`);
   }
