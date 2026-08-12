@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 
-const ACCOUNTS = ['realDonaldTrump', 'i1ota', 'elonmusk'];
+const ACCOUNTS = ['realDonaldTrump', 'i1ota', 'elonmusk', 'TruthTrumpPost'];
 const STATE_FILE = 'state.json';
 
 const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
