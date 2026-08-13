@@ -101,10 +101,19 @@ async function checkAccount(page, handle, state) {
     if (p.quoted && p.quoted.text) {
       original += (original ? '\n\n' : '') + `[引用 @${p.quoted.author}]：${p.quoted.text}`;
     }
-    if (!original) continue;
 
-    const translated = await translateToZhTW(original);
-    const message = `【${handle} 新貼文】\n原文：${original}\n翻譯：${translated}\n連結：${p.url}`;
+    let message;
+    if (!original) {
+      // Don't silently drop posts we couldn't extract text from (e.g. a
+      // pure media quote-repost, or a DOM/selector mismatch) — always notify
+      // with the link so nothing goes missing, and log it for debugging.
+      message = `【${handle} 新貼文】\n(未擷取到文字內容，可能是純媒體貼文)\n連結：${p.url}`;
+      console.log(`No text extracted for ${handle} ${p.id}, notifying with link only`);
+    } else {
+      const translated = await translateToZhTW(original);
+      message = `【${handle} 新貼文】\n原文：${original}\n翻譯：${translated}\n連結：${p.url}`;
+    }
+
     await sendDiscord(message);
     console.log(`Notified: ${handle} ${p.id}`);
   }
