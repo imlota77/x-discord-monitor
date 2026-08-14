@@ -2,6 +2,7 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 
 const ACCOUNTS = ['realDonaldTrump', 'i1ota', 'elonmusk', 'TruthTrumpPost', 'JeffDean', 'DeItaone', 'unusual_whales'];
+const YOUTUBE_CHANNELS = ['yutinghaofinance'];
 const STATE_FILE = 'state.json';
 
 const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
@@ -126,6 +127,56 @@ async function checkAccount(page, handle, state) {
   state[handle] = uniquePosts.reduce((max, p) => (BigInt(p.id) > BigInt(max) ? p.id : max), seed);
 }
 
+async function checkYouTubeChannel(page, channelHandle, state) {
+  const key = `yt:${channelHandle}`;
+  await page.goto(`https://www.youtube.com/@${channelHandle}/posts`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.waitForTimeout(5000);
+
+  // Community posts have no numeric/pinned ordering like X — the feed is
+  // assumed newest-first in DOM order, so we stop at the last-seen post id.
+  const posts = await page.$$eval('ytd-backstage-post-thread-renderer', threads =>
+    threads.map(thread => {
+      const idLink = thread.querySelector('a[href^="/post/"]');
+      if (!idLink) return null;
+      const href = idLink.getAttribute('href');
+      const id = href.split('/post/')[1]?.split(/[/?]/)[0];
+      if (!id) return null;
+      const textEl = thread.querySelector('#content-text');
+      return { id, url: `https://www.youtube.com${href}`, text: textEl ? textEl.innerText : '' };
+    }).filter(Boolean)
+  );
+
+  if (posts.length === 0) {
+    const title = await page.title();
+    const bodySnippet = await page.evaluate(() => document.body.innerText.slice(0, 300));
+    console.log(`${key}: no posts found. title="${title}" bodySnippet="${bodySnippet.replace(/\n/g, ' ')}"`);
+    return;
+  }
+
+  const lastSeenId = state[key];
+  const newPosts = [];
+  for (const p of posts) {
+    if (p.id === lastSeenId) break;
+    newPosts.push(p);
+  }
+  newPosts.reverse(); // oldest new post first
+
+  for (const p of newPosts) {
+    let message;
+    if (!p.text) {
+      message = `【${channelHandle} 新社群貼文】\n(未擷取到文字內容)\n連結：${p.url}`;
+      console.log(`No text extracted for ${key} ${p.id}, notifying with link only`);
+    } else {
+      const translated = await translateToZhTW(p.text);
+      message = `【${channelHandle} 新社群貼文】\n原文：${p.text}\n翻譯：${translated}\n連結：${p.url}`;
+    }
+    await sendDiscord(message);
+    console.log(`Notified: ${key} ${p.id}`);
+  }
+
+  state[key] = posts[0].id;
+}
+
 async function main() {
   if (!DISCORD_WEBHOOK || !AUTH_TOKEN || !CT0) {
     console.error('Missing required environment variables (DISCORD_WEBHOOK_URL / X_AUTH_TOKEN / X_CT0).');
@@ -146,6 +197,14 @@ async function main() {
       await checkAccount(page, handle, state);
     } catch (err) {
       console.error(`Error checking ${handle}:`, err.message);
+    }
+  }
+
+  for (const channelHandle of YOUTUBE_CHANNELS) {
+    try {
+      await checkYouTubeChannel(page, channelHandle, state);
+    } catch (err) {
+      console.error(`Error checking yt:${channelHandle}:`, err.message);
     }
   }
 
