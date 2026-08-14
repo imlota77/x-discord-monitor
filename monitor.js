@@ -6,6 +6,7 @@ const YOUTUBE_CHANNELS = ['yutinghaofinance'];
 const STATE_FILE = 'state.json';
 
 const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
+const YT_DISCORD_WEBHOOK = process.env.YT_DISCORD_WEBHOOK_URL || DISCORD_WEBHOOK;
 const AUTH_TOKEN = process.env.X_AUTH_TOKEN;
 const CT0 = process.env.X_CT0;
 
@@ -33,8 +34,8 @@ async function translateToZhTW(text) {
   }
 }
 
-async function sendDiscord(content) {
-  await fetch(DISCORD_WEBHOOK, {
+async function sendDiscord(content, webhook = DISCORD_WEBHOOK) {
+  await fetch(webhook, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content })
@@ -170,7 +171,7 @@ async function checkYouTubeChannel(page, channelHandle, state) {
       const translated = await translateToZhTW(p.text);
       message = `【${channelHandle} 新社群貼文】\n原文：${p.text}\n翻譯：${translated}\n連結：${p.url}`;
     }
-    await sendDiscord(message);
+    await sendDiscord(message, YT_DISCORD_WEBHOOK);
     console.log(`Notified: ${key} ${p.id}`);
   }
 
