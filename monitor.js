@@ -22,6 +22,12 @@ function saveState(state) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + '\n');
 }
 
+function isMostlyChinese(text) {
+  const cjk = text.match(/[一-鿿]/g) || [];
+  const letters = text.match(/[\p{L}]/gu) || [];
+  return letters.length > 0 && cjk.length / letters.length > 0.5;
+}
+
 async function translateToZhTW(text) {
   try {
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-TW&dt=t&q=${encodeURIComponent(text)}`;
@@ -167,6 +173,9 @@ async function checkYouTubeChannel(page, channelHandle, state) {
     if (!p.text) {
       message = `【${channelHandle} 新社群貼文】\n(未擷取到文字內容)\n連結：${p.url}`;
       console.log(`No text extracted for ${key} ${p.id}, notifying with link only`);
+    } else if (isMostlyChinese(p.text)) {
+      // Already in Chinese — skip the translate call and the redundant line.
+      message = `【${channelHandle} 新社群貼文】\n${p.text}\n連結：${p.url}`;
     } else {
       const translated = await translateToZhTW(p.text);
       message = `【${channelHandle} 新社群貼文】\n原文：${p.text}\n翻譯：${translated}\n連結：${p.url}`;
