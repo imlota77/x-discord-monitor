@@ -1,8 +1,6 @@
 name: X Monitor
 
 on:
-  schedule:
-    - cron: '7 * * * *'
   workflow_dispatch: {}
 
 jobs:
@@ -33,5 +31,12 @@ jobs:
           git config user.name "x-monitor-bot"
           git config user.email "actions@github.com"
           git add state.json
-          git diff --staged --quiet || git commit -m "update state"
+          git diff --staged --quiet && exit 0
+          git commit -m "update state"
+          for i in 1 2 3 4 5; do
+            git push && exit 0
+            echo "push rejected (concurrent run?), retrying ($i)..."
+            git pull --rebase --autostash
+            sleep 3
+          done
           git push
