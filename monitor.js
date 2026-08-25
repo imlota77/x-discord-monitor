@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 
-const ACCOUNTS = ['realDonaldTrump', 'i1ota', 'elonmusk', 'TruthTrumpPost', 'JeffDean', 'DeItaone', 'unusual_whales'];
+const ACCOUNTS = ['realDonaldTrump', 'i1ota', 'elonmusk', 'TruthTrumpPost', 'JeffDean', 'DeItaone', 'unusual_whales', 'aleabitoreddit'];
 const YOUTUBE_CHANNELS = ['yutinghaofinance'];
 const STATE_FILE = 'state.json';
 
