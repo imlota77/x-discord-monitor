@@ -28,16 +28,49 @@ function isMostlyChinese(text) {
   return letters.length > 0 && cjk.length / letters.length > 0.5;
 }
 
+async function translateViaGoogle(text) {
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-TW&dt=t&q=${encodeURIComponent(text)}`;
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json'
+    }
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return data[0].map(seg => seg[0]).join('');
+}
+
+async function translateViaMyMemory(text) {
+  const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|zh-TW`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.responseData || !data.responseData.translatedText) throw new Error('no translation in response');
+  return data.responseData.translatedText;
+}
+
 async function translateToZhTW(text) {
-  try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-TW&dt=t&q=${encodeURIComponent(text)}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    return data[0].map(seg => seg[0]).join('');
-  } catch (err) {
-    console.error('Translation failed:', err.message);
-    return '（翻譯失敗）';
+  // Google's unofficial endpoint occasionally gets rate-limited when hit
+  // repeatedly in a short window (e.g. many accounts translated back to
+  // back within one run) — retry once, then fall back to MyMemory (which
+  // only accepts shorter text) before giving up.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await translateViaGoogle(text);
+    } catch (err) {
+      console.error(`Google translate attempt ${attempt + 1} failed:`, err.message);
+      if (attempt === 0) await new Promise(r => setTimeout(r, 1500));
+    }
   }
+  if (text.length <= 480) {
+    try {
+      return await translateViaMyMemory(text);
+    } catch (err) {
+      console.error('MyMemory fallback failed:', err.message);
+    }
+  }
+  return '（翻譯失敗，請見原文或點連結查看）';
 }
 
 async function sendDiscord(content, webhook = DISCORD_WEBHOOK) {
@@ -45,6 +78,51 @@ async function sendDiscord(content, webhook = DISCORD_WEBHOOK) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content })
+  });
+}
+
+async function sendDiscordLong(content, webhook = DISCORD_WEBHOOK) {
+  const LIMIT = 1900; // stay under Discord's 2000-char message cap
+  if (content.length <= LIMIT) {
+    await sendDiscord(content, webhook);
+    return;
+  }
+  let remaining = content;
+  while (remaining.length > 0) {
+    if (remaining.length <= LIMIT) {
+      await sendDiscord(remaining, webhook);
+      break;
+    }
+    let cut = remaining.lastIndexOf('\n', LIMIT);
+    if (cut < LIMIT * 0.5) cut = LIMIT; // no good line break — hard cut
+    await sendDiscord(remaining.slice(0, cut), webhook);
+    remaining = remaining.slice(cut).replace(/^\n+/, '');
+    await new Promise(r => setTimeout(r, 300));
+  }
+}
+
+// X collapses long posts behind a "Show more" link in the timeline view —
+// the timeline DOM only ever contains the truncated preview text, never the
+// full post. To get the complete content we have to open the individual
+// status page, which always renders the full, untruncated text.
+async function fetchFullPostText(page, url) {
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.waitForTimeout(3000);
+  return page.evaluate(() => {
+    const article = document.querySelector('article');
+    if (!article) return { text: '', quoted: null };
+    const nested = article.querySelector('article');
+    const textEls = Array.from(article.querySelectorAll('[data-testid="tweetText"]'));
+    const ownTextEl = nested ? textEls.find(el => !nested.contains(el)) : textEls[0];
+    const text = ownTextEl ? ownTextEl.innerText : '';
+    let quoted = null;
+    if (nested) {
+      const qTextEl = nested.querySelector('[data-testid="tweetText"]');
+      const qLink = nested.querySelector('a[href*="/status/"]');
+      const qHandle = qLink ? qLink.href.split('/status/')[0].split('/').filter(Boolean).pop() : null;
+      quoted = { author: qHandle, text: qTextEl ? qTextEl.innerText : '' };
+    }
+    return { text, quoted };
   });
 }
 
@@ -105,9 +183,19 @@ async function checkAccount(page, handle, state) {
     .sort((a, b) => (BigInt(a.id) > BigInt(b.id) ? 1 : -1)); // oldest new post first
 
   for (const p of newPosts) {
-    let original = p.text || '';
-    if (p.quoted && p.quoted.text) {
-      original += (original ? '\n\n' : '') + `[引用 @${p.quoted.author}]：${p.quoted.text}`;
+    // Re-fetch from the status page so we get the full, untruncated text
+    // instead of the "Show more"-clipped preview from the timeline. Fall
+    // back to the timeline text if this fails for any reason.
+    let full = { text: p.text, quoted: p.quoted };
+    try {
+      full = await fetchFullPostText(page, p.url);
+    } catch (err) {
+      console.error(`Failed to fetch full text for ${handle} ${p.id}, using timeline preview:`, err.message);
+    }
+
+    let original = full.text || '';
+    if (full.quoted && full.quoted.text) {
+      original += (original ? '\n\n' : '') + `[引用 @${full.quoted.author}]：${full.quoted.text}`;
     }
 
     let message;
@@ -115,14 +203,14 @@ async function checkAccount(page, handle, state) {
       // Don't silently drop posts we couldn't extract text from (e.g. a
       // pure media quote-repost, or a DOM/selector mismatch) — always notify
       // with the link so nothing goes missing, and log it for debugging.
-      message = `【${handle} 新貼文】\n(未擷取到文字內容，可能是純媒體貼文)\n連結：${p.url}`;
+      message = `## ${handle} 新貼文\n(未擷取到文字內容，可能是純媒體貼文)\n連結：${p.url}`;
       console.log(`No text extracted for ${handle} ${p.id}, notifying with link only`);
     } else {
       const translated = await translateToZhTW(original);
-      message = `【${handle} 新貼文】\n原文：${original}\n翻譯：${translated}\n連結：${p.url}`;
+      message = `## ${handle} 新貼文\n**原文：**\n${original}\n\n**翻譯：**\n${translated}\n\n連結：${p.url}`;
     }
 
-    await sendDiscord(message);
+    await sendDiscordLong(message);
     console.log(`Notified: ${handle} ${p.id}`);
   }
 
@@ -171,16 +259,16 @@ async function checkYouTubeChannel(page, channelHandle, state) {
   for (const p of newPosts) {
     let message;
     if (!p.text) {
-      message = `【${channelHandle} 新社群貼文】\n(未擷取到文字內容)\n連結：${p.url}`;
+      message = `## ${channelHandle} 新社群貼文\n(未擷取到文字內容)\n連結：${p.url}`;
       console.log(`No text extracted for ${key} ${p.id}, notifying with link only`);
     } else if (isMostlyChinese(p.text)) {
       // Already in Chinese — skip the translate call and the redundant line.
-      message = `【${channelHandle} 新社群貼文】\n${p.text}\n連結：${p.url}`;
+      message = `## ${channelHandle} 新社群貼文\n${p.text}\n\n連結：${p.url}`;
     } else {
       const translated = await translateToZhTW(p.text);
-      message = `【${channelHandle} 新社群貼文】\n原文：${p.text}\n翻譯：${translated}\n連結：${p.url}`;
+      message = `## ${channelHandle} 新社群貼文\n**原文：**\n${p.text}\n\n**翻譯：**\n${translated}\n\n連結：${p.url}`;
     }
-    await sendDiscord(message, YT_DISCORD_WEBHOOK);
+    await sendDiscordLong(message, YT_DISCORD_WEBHOOK);
     console.log(`Notified: ${key} ${p.id}`);
   }
 
