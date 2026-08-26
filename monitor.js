@@ -51,23 +51,24 @@ async function translateViaMyMemory(text) {
 }
 
 async function translateToZhTW(text) {
-  // Google's unofficial endpoint occasionally gets rate-limited when hit
-  // repeatedly in a short window (e.g. many accounts translated back to
-  // back within one run) — retry once, then fall back to MyMemory (which
-  // only accepts shorter text) before giving up.
+  // GitHub Actions' shared IP ranges are now consistently getting HTTP 429
+  // (rate-limited) from Google's unofficial endpoint, so for short text try
+  // MyMemory first — it isn't blocked and avoids wasting time on a Google
+  // call we already know will fail. MyMemory has a ~500-char input cap, so
+  // longer posts go straight to Google (with one retry).
+  if (text.length <= 480) {
+    try {
+      return await translateViaMyMemory(text);
+    } catch (err) {
+      console.error('MyMemory failed:', err.message);
+    }
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       return await translateViaGoogle(text);
     } catch (err) {
       console.error(`Google translate attempt ${attempt + 1} failed:`, err.message);
       if (attempt === 0) await new Promise(r => setTimeout(r, 1500));
-    }
-  }
-  if (text.length <= 480) {
-    try {
-      return await translateViaMyMemory(text);
-    } catch (err) {
-      console.error('MyMemory fallback failed:', err.message);
     }
   }
   return '（翻譯失敗，請見原文或點連結查看）';
