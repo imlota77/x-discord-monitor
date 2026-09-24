@@ -1,0 +1,39 @@
+name: Health Check
+
+on:
+  schedule:
+    - cron: '17 3 * * *'  # once daily, off-the-hour to avoid GitHub's peak-minute congestion
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check that X Monitor has run recently
+        env:
+          # GITHUB_TOKEN is auto-provided by Actions and never expires (unlike
+          # the external PAT cron-job.org uses to trigger the main workflow),
+          # so this check keeps working even if that PAT dies again.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          RESP=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/actions/workflows/monitor.yml/runs?per_page=1")
+          LAST_RUN=$(echo "$RESP" | jq -r '.workflow_runs[0].created_at // empty')
+          if [ -z "$LAST_RUN" ]; then
+            echo "Could not determine last run time; skipping alert to avoid false positives."
+            exit 0
+          fi
+          LAST_EPOCH=$(date -d "$LAST_RUN" +%s)
+          NOW_EPOCH=$(date -u +%s)
+          HOURS_SINCE=$(( (NOW_EPOCH - LAST_EPOCH) / 3600 ))
+          echo "Last X Monitor run: $LAST_RUN ($HOURS_SINCE hours ago)"
+          if [ "$HOURS_SINCE" -ge 6 ]; then
+            MSG="⚠️ **X Monitor 健康檢查警報**\\n主監控排程已經 ${HOURS_SINCE} 小時沒有執行紀錄了，最後一次是 ${LAST_RUN}。\\n最常見原因：cron-job.org 用來觸發的 GitHub 權杖過期或失效，請登入 https://console.cron-job.org 檢查該任務的執行紀錄，並視需要到 https://github.com/settings/tokens 重新產生權杖。"
+            curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" \
+              -d "{\"content\": \"$MSG\"}"
+          else
+            echo "Healthy — no alert needed."
+          fi
