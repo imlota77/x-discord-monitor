@@ -129,7 +129,10 @@ async function fetchFullPostText(page, url) {
 
 async function checkAccount(page, handle, state) {
   await page.goto(`https://x.com/${handle}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(5000);
+  // Wait for actual timeline content instead of a blind fixed delay, so a
+  // slow-to-resolve Cloudflare "Just a moment..." JS challenge gets more
+  // time to finish and redirect before we give up and read the DOM.
+  await page.waitForSelector('[data-testid="cellInnerDiv"]', { timeout: 15000 }).catch(() => {});
 
   // Only look at top-level timeline cells (cellInnerDiv) and take each cell's
   // OUTER article — this excludes nested articles from quote-tweets/embeds,
@@ -283,8 +286,23 @@ async function main() {
   }
 
   const state = loadState();
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+  // X's Cloudflare front door has started challenging GitHub Actions' cloud
+  // IP ranges with a "Just a moment..." bot-verification page. Reducing
+  // headless-automation fingerprints (webdriver flag, realistic UA/viewport/
+  // locale/timezone) at least gives the JS challenge a chance to pass instead
+  // of never resolving.
+  const browser = await chromium.launch({
+    args: ['--disable-blink-features=AutomationControlled']
+  });
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    viewport: { width: 1280, height: 900 },
+    locale: 'en-US',
+    timezoneId: 'America/New_York'
+  });
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
   await context.addCookies([
     { name: 'auth_token', value: AUTH_TOKEN, domain: '.x.com', path: '/' },
     { name: 'ct0', value: CT0, domain: '.x.com', path: '/' }
