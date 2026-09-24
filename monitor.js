@@ -1,7 +1,13 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 
-const ACCOUNTS = ['realDonaldTrump', 'i1ota', 'elonmusk', 'TruthTrumpPost', 'JeffDean', 'DeItaone', 'unusual_whales', 'aleabitoreddit'];
+// X/Twitter checking moved off this cloud workflow — X's Cloudflare front
+// door started consistently challenging GitHub Actions' shared cloud IP
+// ranges with a "Just a moment..." bot-verification page as of 2026-09-24,
+// which no amount of header/fingerprint spoofing from here gets past. X
+// accounts are now monitored from a local session instead (residential IP,
+// not flagged). YouTube is unaffected and stays on this cloud schedule.
+const ACCOUNTS = [];
 const YOUTUBE_CHANNELS = ['yutinghaofinance'];
 const STATE_FILE = 'state.json';
 
